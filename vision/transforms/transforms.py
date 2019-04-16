@@ -65,6 +65,14 @@ class Lambda(object):
 
     def __call__(self, img, boxes=None, labels=None):
         return self.lambd(img, boxes, labels)
+class DivideStd(object):
+    def __init__(self, std):
+        self.std = std
+
+    def __call__(self, image, boxes=None, labels=None):
+        image = image.astype(np.float32)
+        image /= self.std
+        return image.astype(np.float32), boxes, labels
 
 
 class ConvertFromInts(object):

@@ -1,7 +1,10 @@
 .DS_Store
 .idea
+.vscode
 log
 models
+
+Pipfile.lock
 
 eval_results/
 

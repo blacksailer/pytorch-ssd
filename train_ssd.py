@@ -3,7 +3,7 @@ import os
 import logging
 import sys
 import itertools
-
+import cv2
 import torch
 from torch.utils.data import DataLoader, ConcatDataset
 from torch.optim.lr_scheduler import CosineAnnealingLR, MultiStepLR
@@ -23,10 +23,13 @@ from vision.ssd.config import mobilenetv1_ssd_config
 from vision.ssd.config import squeezenet_ssd_config
 from vision.ssd.data_preprocessing import TrainAugmentation, TestTransform
 
+from vision.utils import box_utils
+from particles.datasets.SyntheticParticlesDataset import SyntheticParticlesDataset
+import torchvision
 parser = argparse.ArgumentParser(
     description='Single Shot MultiBox Detector Training With Pytorch')
 
-parser.add_argument("--dataset_type", default="voc", type=str,
+parser.add_argument("--dataset_type", default="particles", type=str,
                     help='Specify dataset type. Currently support voc and open_images.')
 
 parser.add_argument('--datasets', nargs='+', help='Dataset directory path')
@@ -113,7 +116,7 @@ def train(loader, net, criterion, optimizer, device, debug_steps=100, epoch=-1):
     running_regression_loss = 0.0
     running_classification_loss = 0.0
     for i, data in enumerate(loader):
-        images, boxes, labels = data
+        images, boxes, labels, ids = data
         images = images.to(device)
         boxes = boxes.to(device)
         labels = labels.to(device)
@@ -142,6 +145,33 @@ def train(loader, net, criterion, optimizer, device, debug_steps=100, epoch=-1):
             running_regression_loss = 0.0
             running_classification_loss = 0.0
 
+        orig_image = cv2.imread(dataset_path + '/JPEGImages/{}.jpg'.format(ids[0]))
+        image = cv2.cvtColor(orig_image, cv2.COLOR_BGR2RGB)
+        width, height, _ = image.shape
+        #particle_boxes = locations[confidence[:, :, 1] > 0.5]
+        boxes = box_utils.convert_locations_to_boxes(
+                locations, net.config.priors.to(device), net.config.center_variance, net.config.size_variance
+            )
+        #only particles
+        mask = confidence[:,:,1] > 0.6
+        particle_boxes = boxes[mask, :]
+        particle_boxes = box_utils.center_form_to_corner_form(particle_boxes)
+        
+        for box in particle_boxes:
+            box = box.detach().cpu().numpy()
+            cv2.rectangle(orig_image, (int(box[0] * width), int(box[1] * height)),
+             (int(box[2] * width), int(box[3]  * height)), (255, 255, 0), 4)
+            #label = f"""{voc_dataset.class_names[labels[i]]}: {probs[i]:.2f}"""
+            # label = f"{class_names[labels[i]]}: {probs[i]:.2f}"
+            # cv2.putText(orig_image, label,
+            #             (box[0] + 20, box[1] + 40),
+            #             cv2.FONT_HERSHEY_SIMPLEX,
+            #             1,  # font scale
+            #             (255, 0, 255),
+            #             2)  # line type
+        path = "run_train_ssd_example_output.jpg"
+        cv2.imwrite(path, orig_image)
+
 
 def test(loader, net, criterion, device):
     net.eval()
@@ -150,7 +180,7 @@ def test(loader, net, criterion, device):
     running_classification_loss = 0.0
     num = 0
     for _, data in enumerate(loader):
-        images, boxes, labels = data
+        images, boxes, labels, ids = data
         images = images.to(device)
         boxes = boxes.to(device)
         labels = labels.to(device)
@@ -213,9 +243,16 @@ if __name__ == '__main__':
             store_labels(label_file, dataset.class_names)
             logging.info(dataset)
             num_classes = len(dataset.class_names)
-
+        elif args.dataset_type == 'particles':
+            dataset = SyntheticParticlesDataset(dataset_path
+            # ,transform=torchvision.transforms.Compose([torchvision.transforms.Resize((300,300)),torchvision.transforms.ToTensor()]))
+            ,transform=train_transform, target_transform=target_transform)
+            label_file = os.path.join(args.checkpoint_folder, "particle-model-labels.txt")
+            store_labels(label_file, dataset.class_names)
+            logging.info(dataset)
+            num_classes = len(dataset.class_names)
         else:
-            raise ValueError(f"Dataset tpye {args.dataset_type} is not supported.")
+            raise ValueError(f"Dataset type {args.dataset_type} is not supported.")
         datasets.append(dataset)
     logging.info(f"Stored labels into file {label_file}.")
     train_dataset = ConcatDataset(datasets)
@@ -227,6 +264,10 @@ if __name__ == '__main__':
     if args.dataset_type == "voc":
         val_dataset = VOCDataset(args.validation_dataset, transform=test_transform,
                                  target_transform=target_transform, is_test=True)
+    elif args.dataset_type == 'particles':
+        val_dataset = SyntheticParticlesDataset(args.validation_dataset
+        # ,transform=torchvision.transforms.Compose([torchvision.transforms.Resize((300,300)),torchvision.transforms.ToTensor()]))
+        ,transform=train_transform, target_transform=target_transform)
     elif args.dataset_type == 'open_images':
         val_dataset = OpenImagesDataset(dataset_path,
                                         transform=test_transform, target_transform=target_transform,

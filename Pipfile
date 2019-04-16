@@ -1,0 +1,15 @@
+[[source]]
+name = "pypi"
+url = "https://pypi.org/simple"
+verify_ssl = true
+
+[dev-packages]
+
+[packages]
+pandas = "*"
+torch = {file = "https://download.pytorch.org/whl/cu90/torch-1.0.1-cp36-cp36m-win_amd64.whl"}
+opencv-python = {file = "https://download.lfd.uci.edu/pythonlibs/u2hcgva4/opencv_python-3.4.5-cp36-cp36m-win_amd64.whl"}
+torchvision = "*"
+
+[requires]
+python_version = "3.6"
