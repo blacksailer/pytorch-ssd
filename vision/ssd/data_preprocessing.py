@@ -11,6 +11,7 @@ class TrainAugmentation:
         self.mean = mean
         self.size = size
         self.augment = Compose([
+            ToGrayscale(),
             ConvertFromInts(),
             # PhotometricDistort(),
             Expand(self.mean),
@@ -22,6 +23,19 @@ class TrainAugmentation:
             DivideStd(std),
             ToTensor(),
         ])
+        # Circle
+        # self.augment = Compose([
+        #     ConvertFromInts(),
+        #     PhotometricDistort(),
+        #     ExpandCircles(self.mean),
+        #     # RandomSampleCrop(),
+        #     RandomMirror(),
+        #     CircleToPercentCoords(),
+        #     Resize(self.size),
+        #     SubtractMeans(self.mean),
+        #     DivideStd(std),
+        #     ToTensor(),
+        # ])
 
     def __call__(self, img, boxes, labels):
         """
@@ -37,6 +51,7 @@ class TrainAugmentation:
 class TestTransform:
     def __init__(self, size, mean=0.0, std=1.0):
         self.transform = Compose([
+            ToGrayscale(),
             ToPercentCoords(),
             Resize(size),
             SubtractMeans(mean),

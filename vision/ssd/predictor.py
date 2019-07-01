@@ -26,8 +26,80 @@ class Predictor:
 
         self.timer = Timer()
 
+    def predict_pieces_mod(self, pieces, offsets, top_k=-1, prob_threshold=None):
+        BATCH_SIZE = 10
+        cpu_device = torch.device("cpu")
+        height, width, _ = pieces[0].shape
+        images = []
+        for image in pieces:
+            image = self.transform(image)
+            images.append(image)
+        images = torch.stack(images)
+        images = images.to(self.device)
+        all_scores = []
+        all_boxes = []
+        self.timer.start()
+
+        for idx,batch in enumerate(DataLoader(TensorDataset(images),batch_size=BATCH_SIZE)):
+            with torch.no_grad():
+                self.timer.start()
+                scores, boxes = self.net.forward(batch[0])
+                boxes *= 300
+
+                for idx2,offset in enumerate(offsets[idx*BATCH_SIZE:(idx+1)*BATCH_SIZE]):
+                    boxes[idx2,:, 0] += offset[0]
+                    boxes[idx2,:, 1] +=  offset[1]
+                    boxes[idx2,:, 2] += offset[0]
+                    boxes[idx2,:, 3] +=  offset[1]
+                boxes[:,:,0] /= 3300
+                boxes[:,:,1] /= 2700
+                boxes[:,:,2] /= 3300
+                boxes[:,:,3] /= 2700
+                all_scores.append(scores)
+                all_boxes.append(boxes)
+        all_scores = torch.cat(all_scores)
+        all_boxes = torch.cat(all_boxes)
+        all_boxes = torch.reshape(all_boxes,(-1,4))
+        all_scores = torch.reshape(all_scores,(-1,2))
+      
+        if not prob_threshold:
+            prob_threshold = self.filter_threshold
+        # this version of nms is slower on GPU, so we move data to CPU.
+        boxes = all_boxes#.to(cpu_device)
+        scores = all_scores#.to(cpu_device)
+        picked_box_probs = []
+        picked_labels = []
+        for class_index in range(1, scores.size(1)):
+            probs = scores[:, class_index]
+            mask = probs > prob_threshold
+            probs = probs[mask]
+            if probs.size(0) == 0:
+                continue
+            subset_boxes = boxes[mask, :]
+            box_probs = torch.cat([subset_boxes, probs.reshape(-1, 1)], dim=1)
+
+            box_probs = box_utils.nms(box_probs, self.nms_method,
+                                    score_threshold=prob_threshold,
+                                    iou_threshold=self.iou_threshold,
+                                    sigma=self.sigma,
+                                    top_k=top_k,
+                                    candidate_size=self.candidate_size)
+            picked_box_probs.append(box_probs)
+            picked_labels.extend([class_index] * box_probs.size(0))
+        if not picked_box_probs:
+            return torch.tensor([]), torch.tensor([]), torch.tensor([])
+        picked_box_probs = torch.cat(picked_box_probs)
+        picked_box_probs[:, 0] *= 3300
+        picked_box_probs[:, 1] *= 2700
+        picked_box_probs[:, 2] *= 3300
+        picked_box_probs[:, 3] *= 2700
+        picked_box_probs = picked_box_probs.to(cpu_device)
+        print("Inference time: ", self.timer.end())
+
+        return picked_box_probs[:, :4],picked_labels,picked_box_probs[:, 4]
+ 
     def predict_pieces(self, pieces, offsets, top_k=-1, prob_threshold=None):
-        BATCH_SIZE = 20
+        BATCH_SIZE = 10
         cpu_device = torch.device("cpu")
         height, width, _ = pieces[0].shape
         images = []
@@ -68,6 +140,7 @@ class Predictor:
                     continue
                 subset_boxes = boxes[mask, :]
                 box_probs = torch.cat([subset_boxes, probs.reshape(-1, 1)], dim=1)
+                
                 box_probs = box_utils.nms(box_probs, self.nms_method,
                                         score_threshold=prob_threshold,
                                         iou_threshold=self.iou_threshold,
@@ -95,7 +168,7 @@ class Predictor:
             labels.append(torch.tensor(picked_labels))
             result_probs.append(picked_box_probs[:, 4])
         return torch.cat(result_box),torch.cat(labels),torch.cat(result_probs)
-   
+
     def predict(self, image, top_k=-1, prob_threshold=None):
         cpu_device = torch.device("cpu")
         height, width, _ = image.shape

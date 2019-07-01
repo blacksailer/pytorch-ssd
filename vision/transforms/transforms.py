@@ -79,6 +79,9 @@ class ConvertFromInts(object):
     def __call__(self, image, boxes=None, labels=None):
         return image.astype(np.float32), boxes, labels
 
+class ToGrayscale(object):
+    def __call__(self, image, boxes=None, labels=None):
+        return cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)[:,:,None], boxes, labels
 
 class SubtractMeans(object):
     def __init__(self, mean):
@@ -100,7 +103,14 @@ class ToAbsoluteCoords(object):
 
         return image, boxes, labels
 
+class CircleToAbsoluteCoords(object):
+    def __call__(self, image, boxes=None, labels=None):
+        height, width, channels = image.shape
+        boxes[:, 0] *= width
+        boxes[:, 2] *= width
+        boxes[:, 1] *= height
 
+        return image, boxes, labels
 class ToPercentCoords(object):
     def __call__(self, image, boxes=None, labels=None):
         height, width, channels = image.shape
@@ -111,6 +121,14 @@ class ToPercentCoords(object):
 
         return image, boxes, labels
 
+class CircleToPercentCoords(object):
+    def __call__(self, image, boxes=None, labels=None):
+        height, width, channels = image.shape
+        boxes[:, 0] /= width
+        boxes[:, 2] /= width
+        boxes[:, 1] /= height
+
+        return image, boxes, labels
 
 class Resize(object):
     def __init__(self, size=300):
@@ -219,7 +237,10 @@ class ToCV2Image(object):
 
 class ToTensor(object):
     def __call__(self, cvimage, boxes=None, labels=None):
-        return torch.from_numpy(cvimage.astype(np.float32)).permute(2, 0, 1), boxes, labels
+        if(len(cvimage.shape) > 2):
+            return torch.from_numpy(cvimage.astype(np.float32)).permute(2, 0, 1), boxes, labels
+        else:
+            return torch.from_numpy(cvimage.astype(np.float32))[:,:,None].permute(2, 0, 1), boxes, labels
 
 
 class RandomSampleCrop(object):
@@ -353,6 +374,31 @@ class Expand(object):
 
         return image, boxes, labels
 
+class ExpandCircles(object):
+    def __init__(self, mean):
+        self.mean = mean
+
+    def __call__(self, image, boxes, labels):
+        if random.randint(2):
+            return image, boxes, labels
+
+        height, width, depth = image.shape
+        ratio = random.uniform(1, 4)
+        left = random.uniform(0, width*ratio - width)
+        top = random.uniform(0, height*ratio - height)
+
+        expand_image = np.zeros(
+            (int(height*ratio), int(width*ratio), depth),
+            dtype=image.dtype)
+        expand_image[:, :, :] = self.mean
+        expand_image[int(top):int(top + height),
+                     int(left):int(left + width)] = image
+        image = expand_image
+
+        boxes = boxes.copy()
+        boxes[:, :2] += (int(left), int(top))
+
+        return image, boxes, labels
 
 class RandomMirror(object):
     def __call__(self, image, boxes, classes):

@@ -5,6 +5,8 @@ from typing import List, Tuple
 import torch.nn.functional as F
 
 from ..utils import box_utils
+from ..utils import circle_utils
+
 from collections import namedtuple
 GraphPath = namedtuple("GraphPath", ['s0', 'name', 's1'])  #
 
@@ -104,7 +106,7 @@ class SSD(nn.Module):
 
         location = self.regression_headers[i](x)
         location = location.permute(0, 2, 3, 1).contiguous()
-        location = location.view(location.size(0), -1, 4)
+        location = location.view(location.size(0), -1, 3)
 
         return confidence, location
 
@@ -157,6 +159,22 @@ class MatchPrior(object):
         locations = box_utils.convert_boxes_to_locations(boxes, self.center_form_priors, self.center_variance, self.size_variance)
         return locations, labels
 
+class MatchCirclePrior(object):
+    def __init__(self, center_form_priors, center_variance, size_variance, iou_threshold):
+        self.center_form_priors = center_form_priors
+        self.corner_form_priors = center_form_priors
+        self.center_variance = center_variance
+        self.size_variance = size_variance
+        self.iou_threshold = iou_threshold
+
+    def __call__(self, gt_boxes, gt_labels):
+        if type(gt_boxes) is np.ndarray:
+            gt_boxes = torch.from_numpy(gt_boxes)
+        if type(gt_labels) is np.ndarray:
+            gt_labels = torch.from_numpy(gt_labels)
+        locations, labels = circle_utils.assign_priors(gt_boxes, gt_labels,
+                                                self.corner_form_priors, self.iou_threshold)
+        return locations, labels
 
 def _xavier_init_(m: nn.Module):
     if isinstance(m, nn.Conv2d):

@@ -1,6 +1,5 @@
 import argparse
 import os
-import datetime
 import logging
 import sys
 import itertools
@@ -10,24 +9,22 @@ from torch.utils.data import DataLoader, ConcatDataset
 from torch.optim.lr_scheduler import CosineAnnealingLR, MultiStepLR
 
 from vision.utils.misc import str2bool, Timer, freeze_net_layers, store_labels
-from vision.ssd.ssd import MatchPrior
+from vision.ssd.ssd import MatchCirclePrior
 from vision.ssd.vgg_ssd import create_vgg_ssd
 from vision.ssd.mobilenetv1_ssd import create_mobilenetv1_ssd
-from vision.ssd.mobilenetv1_ssd_particle import create_mobilenetv1_ssd_particle
 from vision.ssd.mobilenetv1_ssd_lite import create_mobilenetv1_ssd_lite
 from vision.ssd.mobilenet_v2_ssd_lite import create_mobilenetv2_ssd_lite
 from vision.ssd.squeezenet_ssd_lite import create_squeezenet_ssd_lite
 from vision.datasets.voc_dataset import VOCDataset
 from vision.datasets.open_images import OpenImagesDataset
-from vision.nn.multibox_loss import MultiboxLoss
+from vision.nn.multibox_loss import MulticircleLoss
 from vision.ssd.config import vgg_ssd_config
 from vision.ssd.config import mobilenetv1_ssd_config
-from vision.ssd.config import mobilenetv1_ssd_config_particle
-
 from vision.ssd.config import squeezenet_ssd_config
 from vision.ssd.data_preprocessing import TrainAugmentation, TestTransform
 
-from vision.utils import box_utils
+from vision.utils import box_utils, circle_utils
+
 from particles.datasets.SyntheticParticlesDataset import SyntheticParticlesDataset
 import torchvision
 parser = argparse.ArgumentParser(
@@ -100,17 +97,12 @@ parser.add_argument('--debug_steps', default=100, type=int,
 parser.add_argument('--use_cuda', default=True, type=str2bool,
                     help='Use CUDA to train model')
 
-parser.add_argument('--checkpoint_folder', default='checkpoints/',
+parser.add_argument('--checkpoint_folder', default='models/',
                     help='Directory for saving checkpoint models')
 
 
-logging.basicConfig(  level=logging.INFO,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    handlers=[
-        logging.FileHandler("train_log_{}.log".format(datetime.datetime.now().strftime('%Y-%m-%d_%H%M'))),
-        logging.StreamHandler()
-    ])
-                   #  stream=sys.stdout,filename="train_log.log",
+logging.basicConfig(stream=sys.stdout, level=logging.INFO,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 args = parser.parse_args()
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() and args.use_cuda else "cpu")
 
@@ -125,14 +117,14 @@ def train(loader, net, criterion, optimizer, device, debug_steps=100, epoch=-1):
     running_regression_loss = 0.0
     running_classification_loss = 0.0
     for i, data in enumerate(loader):
-        images, boxes, labels, ids = data
+        images, circles, labels, ids = data
         images = images.to(device)
-        boxes = boxes.to(device)
+        circles = circles.to(device)
         labels = labels.to(device)
 
         optimizer.zero_grad()
         confidence, locations = net(images)
-        regression_loss, classification_loss = criterion(confidence, locations, labels, boxes)  # TODO CHANGE BOXES
+        regression_loss, classification_loss = criterion(confidence, locations, labels, circles)  # TODO CHANGE BOXES
         loss = regression_loss + classification_loss
         loss.backward()
         optimizer.step()
@@ -154,34 +146,23 @@ def train(loader, net, criterion, optimizer, device, debug_steps=100, epoch=-1):
             running_regression_loss = 0.0
             running_classification_loss = 0.0
 
-        # print(dataset_path,ids)
-        # orig_image = cv2.imread(dataset_path + 'JPEGImages\\{}.jpg'.format(ids[0]))
-        # # print(dataset_path + '/JPEGImages/{}.jpg'.format(ids[0]))
-        # #image = cv2.cvtColor(orig_image, cv2.COLOR_BGR2RGB)
-        # width, height, _ = orig_image.shape
-        # particle_boxes = locations[confidence[:, :, 1] > 0.5]
-        # boxes = box_utils.convert_locations_to_boxes(
-        #         locations, net.config.priors.to(device), net.config.center_variance, net.config.size_variance
-        #     )
-        # #only particles
-        # mask = confidence[:,:,1] > 0.6
-        # particle_boxes = boxes[mask, :]
-        # particle_boxes = box_utils.center_form_to_corner_form(particle_boxes)
+        orig_image = cv2.imread(dataset_path + '/JPEGImages/{}.jpg'.format(ids[0]))
+        # print(dataset_path + '/JPEGImages/{}.jpg'.format(ids[0]))
+        image = cv2.cvtColor(orig_image, cv2.COLOR_BGR2RGB)
+        width, height, _ = image.shape
+        circles = locations[confidence[:, :, 1] > 0.5]
+        #only particles
+        mask = confidence[:,:,1] > 0.5
+        particle_circles = circles[mask, :]
+        particle_circles = circle_utils.center_form_to_corner_form(particle_boxes)
         
-        # for box in particle_boxes:
-        #     box = box.detach().cpu().numpy().T
-        #     cv2.rectangle(orig_image, (int(box[0] * width), int(box[1] * height)),
-        #      (int(box[2] * width), int(box[3]  * height)), (255, 255, 0), 4)
-        #     #label = f"""{voc_dataset.class_names[labels[i]]}: {probs[i]:.2f}"""
-        #     # label = f"{class_names[labels[i]]}: {probs[i]:.2f}"
-        #     # cv2.putText(orig_image, label,
-        #     #             (box[0] + 20, box[1] + 40),
-        #     #             cv2.FONT_HERSHEY_SIMPLEX,
-        #     #             1,  # font scale
-        #     #             (255, 0, 255),
-        #     #             2)  # line type
-        # path = "run_train_ssd_example_output.jpg"
-        # cv2.imwrite(path, orig_image)
+        for circle in particle_circles:
+            circle = circle.detach().cpu().numpy().T
+            cv2.circle(orig_image, (int(circle[0] * width), int(circle[1] * height)),
+             int(circle[2] * width), (255, 255, 0), 4)
+        path = "run_train_ssd_example_output.jpg"
+        cv2.imwrite(path, orig_image)
+
 
 def test(loader, net, criterion, device):
     net.eval()
@@ -190,15 +171,15 @@ def test(loader, net, criterion, device):
     running_classification_loss = 0.0
     num = 0
     for _, data in enumerate(loader):
-        images, boxes, labels, ids = data
+        images, circles, labels, ids = data
         images = images.to(device)
-        boxes = boxes.to(device)
+        circles = circles.to(device)
         labels = labels.to(device)
         num += 1
 
         with torch.no_grad():
             confidence, locations = net(images)
-            regression_loss, classification_loss = criterion(confidence, locations, labels, boxes)
+            regression_loss, classification_loss = criterion(confidence, locations, labels, circles)
             loss = regression_loss + classification_loss
 
         running_loss += loss.item()
@@ -217,9 +198,6 @@ if __name__ == '__main__':
     elif args.net == 'mb1-ssd':
         create_net = create_mobilenetv1_ssd
         config = mobilenetv1_ssd_config
-    elif args.net == 'mb1-ssd-p':
-        create_net = create_mobilenetv1_ssd_particle
-        config = mobilenetv1_ssd_config_particle
     elif args.net == 'mb1-ssd-lite':
         create_net = create_mobilenetv1_ssd_lite
         config = mobilenetv1_ssd_config
@@ -234,7 +212,7 @@ if __name__ == '__main__':
         parser.print_help(sys.stderr)
         sys.exit(1)
     train_transform = TrainAugmentation(config.image_size, config.image_mean, config.image_std)
-    target_transform = MatchPrior(config.priors, config.center_variance,
+    target_transform = MatchCirclePrior(config.priors, config.center_variance,
                                   config.size_variance, 0.5)
 
     test_transform = TestTransform(config.image_size, config.image_mean, config.image_std)
@@ -242,21 +220,7 @@ if __name__ == '__main__':
     logging.info("Prepare training datasets.")
     datasets = []
     for dataset_path in args.datasets:
-        if args.dataset_type == 'voc':
-            dataset = VOCDataset(dataset_path, transform=train_transform,
-                                 target_transform=target_transform)
-            label_file = os.path.join(args.checkpoint_folder, "voc-model-labels.txt")
-            store_labels(label_file, dataset.class_names)
-            num_classes = len(dataset.class_names)
-        elif args.dataset_type == 'open_images':
-            dataset = OpenImagesDataset(dataset_path,
-                 transform=train_transform, target_transform=target_transform,
-                 dataset_type="train", balance_data=args.balance_data)
-            label_file = os.path.join(args.checkpoint_folder, "open-images-model-labels.txt")
-            store_labels(label_file, dataset.class_names)
-            logging.info(dataset)
-            num_classes = len(dataset.class_names)
-        elif args.dataset_type == 'particles':
+        if args.dataset_type == 'particles':
             dataset = SyntheticParticlesDataset(dataset_path
             ,transform=train_transform, target_transform=target_transform)
             label_file = os.path.join(args.checkpoint_folder, "particle-model-labels.txt")
@@ -273,17 +237,9 @@ if __name__ == '__main__':
                               num_workers=args.num_workers,
                               shuffle=True)
     logging.info("Prepare Validation datasets.")
-    if args.dataset_type == "voc":
-        val_dataset = VOCDataset(args.validation_dataset, transform=test_transform,
-                                 target_transform=target_transform, is_test=True)
-    elif args.dataset_type == 'particles':
+    if args.dataset_type == 'particles':
         val_dataset = SyntheticParticlesDataset(args.validation_dataset
-        # ,transform=torchvision.transforms.Compose([torchvision.transforms.Resize((300,300)),torchvision.transforms.ToTensor()]))
         ,transform=train_transform, target_transform=target_transform)
-    elif args.dataset_type == 'open_images':
-        val_dataset = OpenImagesDataset(dataset_path,
-                                        transform=test_transform, target_transform=target_transform,
-                                        dataset_type="test")
         logging.info(val_dataset)
     logging.info("validation dataset size: {}".format(len(val_dataset)))
 
@@ -345,11 +301,11 @@ if __name__ == '__main__':
 
     net.to(DEVICE)
 
-    criterion = MultiboxLoss(config.priors, iou_threshold=0.5, neg_pos_ratio=3,
+    criterion = MulticircleLoss(config.priors, iou_threshold=0.5, neg_pos_ratio=3,
                              center_variance=0.1, size_variance=0.2, device=DEVICE)
-    optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum,
-                weight_decay=args.weight_decay)                         
-    #optimizer = torch.optim.Adam(params, lr=args.lr)
+    # optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum,
+    #                             weight_decay=args.weight_decay)
+    optimizer = torch.optim.Adam(params, lr=args.lr)
     logging.info(f"Learning rate: {args.lr}, Base net learning rate: {base_net_lr}, "
                  + f"Extra Layers learning rate: {extra_layers_lr}.")
 

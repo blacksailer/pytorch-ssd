@@ -7,7 +7,8 @@ models
 Pipfile.lock
 
 eval_results/
-
+*.mp4
+*.log
 # Pytorch Models
 *.pth
 
